@@ -1,9 +1,8 @@
 #include <iostream>
-#define _USE_MATH_DEFINES
-#include <math.h>
-#undef _USE_MATH_DEFINES
 #include <random>
 #include <fstream>
+
+#include "MathLib.h"
 
 using namespace std;
 
@@ -17,46 +16,7 @@ typedef unsigned char uchar;
 #define CLAMP(low, high, val) std::fmin(high, std::fmax(low, val))
 
 std::default_random_engine rng;
-std::uniform_real_distribution<double> uniformDist(0.0, 1.0);
-
-class Vec3
-{
-public:
-	Vec3(double _x = 0., double _y = 0., double _z = 0.) : x(_x), y(_y), z(_z) {}
-	~Vec3() {}
-
-	Vec3 operator+(const Vec3& v) const { return Vec3(x + v.x, y + v.y, z + v.z); }
-	void operator+=(const Vec3& v) { x += v.x; y += v.y; z += v.z; }
-
-	Vec3 operator-(const Vec3& v) const { return Vec3(x - v.x, y - v.y, z - v.z); }
-	void operator-=(const Vec3& v) { x -= v.x; y -= v.y; z -= v.z; }
-
-	Vec3 operator*(const Vec3& v) const { return Vec3(x * v.x, y * v.y, z * v.z); }
-	void operator*=(const Vec3& v) { x *= v.x; y *= v.y; z *= v.z; }
-	void operator*=(const double val) { x *= val; y *= val; z *= val; }
-
-	double dot(const Vec3& v) const { return (x * v.x + y * v.y + z * v.z); }
-	Vec3 cross(const Vec3& v) const { return Vec3(y * v.z - v.y * z, v.x * z - x * v.z, x * v.y - v.x * y); }
-	double length() const { return sqrt(length2()); }
-	double length2() const { return (*this).dot(*this); }
-	Vec3 normalize() const
-	{
-		Vec3 res;
-		double l = length2();
-		if (l > 0.0)
-		{
-			res = *this;
-			l = 1. / l;
-			res *= l;
-
-			return res;
-		}
-
-		return res;
-	}
-
-	double x, y, z;
-};
+std::uniform_real_distribution<float> uniformDist(0.0f, 1.0f);
 
 class Ray
 {
@@ -80,19 +40,19 @@ public:
 	~Sphere() {}
 
 	/* Check if ray intersects sphere */
-	bool intersects(const Ray& ray, double* t)
+	bool intersects(const Ray& ray, float* t)
 	{
 		Vec3 l = ray.m_origin - m_center;
-		double a = ray.m_dir.dot(ray.m_dir);
-		double b = 2 * ray.m_dir.dot(l);
-		double c = l.dot(l) - (m_radius * m_radius);
+		float a = dot(ray.m_dir, ray.m_dir);
+		float b = 2 * dot(ray.m_dir, l);
+		float c = dot(l, l) - (m_radius * m_radius);
 
 		// b2 - 4ac
-		double t1, t2;
-		double det = b * b - 4 * a * c;
+		float t1, t2;
+		float det = b * b - 4 * a * c;
 		if (det < 0) { return false; }
 		else if (det == 0) { t1 = t2 = b * -0.5 * a; }
-		else { double q = (b > 0) ? -0.5 * (b + sqrt(det)) : -0.5 * (b - sqrt(det)); t1 = q / a; t2 = c / q; }
+		else { float q = (b > 0) ? -0.5 * (b + sqrtf(det)) : -0.5 * (b - sqrtf(det)); t1 = q / a; t2 = c / q; }
 
 		if (t1 > t2) std::swap(t1, t2);
 		if (t1 < 0)
@@ -104,10 +64,10 @@ public:
 		return true;
 	}
 
-	Vec3 getSurfaceNormal(const Vec3& v) { return (v - m_center).normalize(); }
+	Vec3 getSurfaceNormal(const Vec3& v) { return normalize(v - m_center); }
 
 	Vec3 m_center;
-	double m_radius;
+	float m_radius;
 
 	Material m_type;
 	Vec3 m_Kd;
@@ -123,11 +83,11 @@ Vec3 g_frameBuffer[WIDTH * HEIGHT];
 Sphere* FindNearest(const Ray &ray)
 {
 	Sphere* obj = NULL;
-	double t = INFINITY;
+	float t = INFINITY;
 	for (int i = 0; i < NUM_SPHERE; i++)
 	{
 		Sphere* s = g_objects[i];
-		double t1 = 0.;
+		float t1 = 0.;
 		if (s->intersects(ray, &t1))
 		{
 			if (t1 < t)
@@ -161,16 +121,16 @@ void formLocalCS(const Vec3& N, Vec3& Nt, Vec3& Nb)
 	else
 		Nt = Vec3(0., -N.z, N.y) * (1. / sqrt(N.y * N.y + N.z * N.z));
 
-	Nb = N.cross(Nb);
+	Nb = cross(N, Nb);
 }
 
 // Generate a uniformly sampled direction
-Vec3 generateSampleDirOverHemisphere(double r1, double r2)
+Vec3 generateSampleDirOverHemisphere(float r1, float r2)
 {
-	double sinTheta = sqrt(1 - r1 * r1);
-	double phi = 2 * M_PI * r2;
-	double x = sinTheta * cos(phi);
-	double z = sinTheta * sin(phi);
+	float sinTheta = sqrt(1 - r1 * r1);
+	float phi = 2 * M_PI * r2;
+	float x = sinTheta * cos(phi);
+	float z = sinTheta * sin(phi);
 
 	return Vec3(x, r1, z);
 }
@@ -185,9 +145,9 @@ void Render()
 	{
 		for (int x = 0; x < WIDTH; x++)
 		{
-			double dx = (2 * (x + 0.5) / (double)WIDTH - 1) * aspect * scale;
-			double dy = (1 - 2 * (y + 0.5) / (double)HEIGHT) * scale;
-			Vec3 dir = Vec3(dx, dy, -1).normalize();
+			float dx = (2 * (x + 0.5) / (double)WIDTH - 1) * aspect * scale;
+			float dy = (1 - 2 * (y + 0.5) / (double)HEIGHT) * scale;
+			Vec3 dir = normalize(Vec3(dx, dy, -1));
 			Ray primRay(origin, dir);
 			g_frameBuffer[x + y * WIDTH] = Shade(primRay, 0);
 		}

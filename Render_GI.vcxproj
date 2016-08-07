@@ -119,6 +119,9 @@
   <ItemGroup>
     <ClCompile Include="render_gi.cpp" />
   </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="MathLib.h" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
