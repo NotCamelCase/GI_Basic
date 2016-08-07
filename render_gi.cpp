@@ -80,8 +80,8 @@ std::vector<Sphere*> g_objects;
 
 Vec3 g_frameBuffer[WIDTH * HEIGHT];
 
-// Iterate all objects in the scene and find nearest object hit by the ray
-Sphere* FindNearest(const Ray &ray)
+// Iterate all objects in the scene and find nearest object hit by the ray and assign intersection point
+Sphere* FindNearest(const Ray &ray, float& _t)
 {
 	Sphere* obj = NULL;
 	float t = INFINITY;
@@ -99,6 +99,7 @@ Sphere* FindNearest(const Ray &ray)
 		}
 	}
 
+	_t = t;
 	return obj;
 }
 
@@ -107,11 +108,17 @@ Vec3 Shade(const Ray& ray, int depth)
 {
 	if (depth >= MAX_DEPTH) return 0;
 
-	Sphere* obj = FindNearest(ray);
+	float t = 0.f;
+	Sphere* obj = FindNearest(ray, t);
+
 	if (obj)
+	{
 		return obj->m_Kd;
+	}
 	else
+	{
 		return Vec3();
+	}
 }
 
 // Creata a local coordinate system oriented around surface normal of hit point on the object
@@ -160,9 +167,9 @@ void Render()
 	fprintf(f, "P3\n%d %d\n%d\n ", WIDTH, HEIGHT, 255);
 	for (int32_t i = 0; i < WIDTH * HEIGHT; ++i)
 	{
-		int r = (255 * fmin(pow(g_frameBuffer[i].x, gamma), 1.));
-		int g = (255 * fmin(pow(g_frameBuffer[i].y, gamma), 1.));
-		int b = (255 * fmin(pow(g_frameBuffer[i].z, gamma), 1.));
+		uint r = (255 * fmin(pow(g_frameBuffer[i].x, gamma), 1.));
+		uint g = (255 * fmin(pow(g_frameBuffer[i].y, gamma), 1.));
+		uint b = (255 * fmin(pow(g_frameBuffer[i].z, gamma), 1.));
 		fprintf(f, "%d %d %d ", r, g, b);
 	}
 	fclose(f);
