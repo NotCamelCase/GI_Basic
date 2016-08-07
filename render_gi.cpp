@@ -1,19 +1,21 @@
 #include <iostream>
 #include <random>
-#include <fstream>
+#include <vector>
 
 #include "MathLib.h"
+
+#define NULL nullptr
+#define SAFE_DELETE(x) { if (x) { delete x; x = NULL; }}
 
 using namespace std;
 
 typedef unsigned char uchar;
+typedef unsigned int uint;
 
 #define WIDTH 1024
 #define HEIGHT 768
 #define FOV M_PI / 4
 #define MAX_DEPTH 10
-
-#define CLAMP(low, high, val) std::fmin(high, std::fmax(low, val))
 
 std::default_random_engine rng;
 std::uniform_real_distribution<float> uniformDist(0.0f, 1.0f);
@@ -74,8 +76,7 @@ public:
 	Vec3 m_Le;
 };
 
-#define NUM_SPHERE 3
-Sphere* g_objects[NUM_SPHERE];
+std::vector<Sphere*> g_objects;
 
 Vec3 g_frameBuffer[WIDTH * HEIGHT];
 
@@ -84,7 +85,7 @@ Sphere* FindNearest(const Ray &ray)
 {
 	Sphere* obj = NULL;
 	float t = INFINITY;
-	for (int i = 0; i < NUM_SPHERE; i++)
+	for (int i = 0; i < g_objects.size(); i++)
 	{
 		Sphere* s = g_objects[i];
 		float t1 = 0.;
@@ -140,7 +141,7 @@ void Render()
 {
 	double scale = tan(FOV * 0.5);
 	double aspect = (double)WIDTH / HEIGHT;
-	Vec3 origin;
+	Vec3 origin = 0.f;
 	for (int y = 0; y < HEIGHT; y++)
 	{
 		for (int x = 0; x < WIDTH; x++)
@@ -153,35 +154,41 @@ void Render()
 		}
 	}
 
-	double gamma = 1 / 2.2;
-	std::ofstream ofs;
-	ofs.open("render.ppm");
-	ofs << "P6\n" << WIDTH << " " << HEIGHT << "\n255\n";
+	const double gamma = 1 / 2.2;
+	FILE *f = NULL;
+	fopen_s(&f, "render.ppm", "w");
+	fprintf(f, "P3\n%d %d\n%d\n ", WIDTH, HEIGHT, 255);
 	for (int32_t i = 0; i < WIDTH * HEIGHT; ++i)
 	{
-		uchar r = (uchar)(255 * CLAMP(0., 1., pow(g_frameBuffer[i].x, gamma)));
-		uchar g = (uchar)(255 * CLAMP(0., 1., pow(g_frameBuffer[i].y, gamma)));
-		uchar b = (uchar)(255 * CLAMP(0., 1., pow(g_frameBuffer[i].z, gamma)));
-		ofs << r << g << b;
+		int r = (255 * fmin(pow(g_frameBuffer[i].x, gamma), 1.));
+		int g = (255 * fmin(pow(g_frameBuffer[i].y, gamma), 1.));
+		int b = (255 * fmin(pow(g_frameBuffer[i].z, gamma), 1.));
+		fprintf(f, "%d %d %d ", r, g, b);
 	}
-	ofs.close();
+	fclose(f);
 }
 
 int main()
 {
-	Sphere* s1 = new Sphere(Vec3(-0.75, -.25, -2.5), .5f, Material::DIFFUSE);
-	Sphere* s2 = new Sphere(Vec3(0.5, 0.12, -4.5), .6f, Material::DIFFUSE);
-	Sphere* s3 = new Sphere(Vec3(0.5, -0.1, -1.75), .2f, Material::DIFFUSE);
+	Sphere* s1 = new Sphere(Vec3(-0.75f, -.20f, -2.55f), .55f, Material::DIFFUSE);
+	Sphere* s2 = new Sphere(Vec3(0.5f, 0.12f, -4.5f), .6f, Material::DIFFUSE);
+	Sphere* s3 = new Sphere(Vec3(0.55f, -0.1f, -1.75f), .27f, Material::DIFFUSE);
 
-	g_objects[0] = s1;
-	g_objects[1] = s2;
-	g_objects[2] = s3;
+	g_objects.push_back(s1);
+	g_objects.push_back(s2);
+	g_objects.push_back(s3);
 
-	s1->m_Kd = Vec3(0.25, 0.5, 0.75);
-	s2->m_Kd = Vec3(0.35, 0.41, 0.15);
-	s3->m_Kd = Vec3(0.25, 0.51, 0.23);
+	s1->m_Kd = Vec3(1.f, 0.f, 0.f);
+	s2->m_Kd = Vec3(0.f, 1.f, 0.f);
+	s3->m_Kd = Vec3(0.f, 0.f, 1.f);
 
 	Render();
+
+	for (Sphere* obj : g_objects)
+	{
+		SAFE_DELETE(obj);
+	}
+	g_objects.clear();
 
 	return 0;
 }
