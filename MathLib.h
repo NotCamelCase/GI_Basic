@@ -6,7 +6,7 @@
 
 #define M_PI 3.141592653589793
 
-#define EPSILON DBL_EPSILON
+#define EPSILON FLT_EPSILON
 
 template<class T, int N>
 class Vector

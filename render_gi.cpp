@@ -1,5 +1,7 @@
 #include <iostream>
+#include <time.h>
 #include <random>
+#include <chrono>
 #include <vector>
 
 #include "MathLib.h"
@@ -12,8 +14,8 @@ using namespace std;
 typedef unsigned char uchar;
 typedef unsigned int uint;
 
-#define WIDTH 1024
-#define HEIGHT 768
+#define WIDTH 1280
+#define HEIGHT 720
 #define FOV M_PI / 4
 #define MAX_DEPTH 10
 
@@ -35,61 +37,103 @@ enum Material
 	DIFFUSE
 };
 
-class Sphere
+enum class RayResult { HIT, MISS };
+
+class Primitive
 {
 public:
-	Sphere(const Vec3& c, double rad, Material type, const Vec3& Le = 0) : m_Le(Le), m_type(type), m_center(c), m_radius(rad) {}
-	~Sphere() {}
+	Primitive(const Vec3& pos, const Vec3& albedo, Material type, const Vec3& Le = 0) : m_position(pos), m_type(type), m_Kd(albedo), m_Le(Le) {}
+	virtual ~Primitive() {}
 
-	/* Check if ray intersects sphere */
-	bool intersects(const Ray& ray, float* t)
-	{
-		Vec3 l = ray.m_origin - m_center;
-		float a = dot(ray.m_dir, ray.m_dir);
-		float b = 2 * dot(ray.m_dir, l);
-		float c = dot(l, l) - (m_radius * m_radius);
+	virtual RayResult intersects(const Ray& ray, float& t) const = 0;
+	virtual Vec3 getSurfaceNormal(const Vec3& point = Vec3(0)) const = 0;
 
-		// b2 - 4ac
-		float t1, t2;
-		float det = b * b - 4 * a * c;
-		if (det < 0) { return false; }
-		else if (det == 0) { t1 = t2 = b * -0.5 * a; }
-		else { float q = (b > 0) ? -0.5 * (b + sqrtf(det)) : -0.5 * (b - sqrtf(det)); t1 = q / a; t2 = c / q; }
-
-		if (t1 > t2) std::swap(t1, t2);
-		if (t1 < 0)
-		{
-			if (t2 > 0) *t = t2;
-			else return false;
-		}
-
-		return true;
-	}
-
-	Vec3 getSurfaceNormal(const Vec3& v) { return normalize(v - m_center); }
-
-	Vec3 m_center;
-	float m_radius;
-
+	Vec3 m_position;
 	Material m_type;
+
 	Vec3 m_Kd;
 	Vec3 m_Le;
 };
 
-std::vector<Sphere*> g_objects;
+class Sphere : public Primitive
+{
+public:
+	Sphere(const Vec3 &cent, float rad, const Vec3& sc, Material type, const Vec3& Le = 0) : Primitive(cent, sc, type, Le), m_radius(rad) {}
+	~Sphere() {}
+
+	virtual RayResult intersects(const Ray& ray, float& t) const override
+	{
+		Vec3 v = m_position - ray.m_origin;
+		float b = dot(v, ray.m_dir);
+		if (b < 0) return RayResult::MISS;
+
+		float d2 = dot(v, v) - b * b;
+		if (d2 > m_radius * m_radius) return RayResult::MISS;
+
+		float det = sqrt(m_radius * m_radius - d2);
+		float t0 = b - det;
+		float t1 = b + det;
+
+		if (t0 < 0) t0 = t1;
+		t = t0;
+
+		return RayResult::HIT;
+	}
+
+	virtual Vec3 getSurfaceNormal(const Vec3& hit = Vec3(0)) const override
+	{
+		return (hit - m_position);
+	}
+
+	float m_radius;
+};
+
+class Plane : public Primitive
+{
+public:
+	Plane(const Vec3 &n, float d, const Vec3& sc, Material type) : Primitive(n, sc, type), m_d(d) {}
+	~Plane() {}
+
+	virtual RayResult intersects(const Ray & ray, float & t) const override
+	{
+		float l = dot(ray.m_dir, m_position);
+		if (!(l <= EPSILON && l > EPSILON))
+		{
+			float dist = -(dot(m_position, ray.m_origin) + m_d) / l;
+			if (dist > 0)
+			{
+				t = dist;
+
+				return RayResult::HIT;
+			}
+		}
+
+		return RayResult::MISS;
+	}
+
+	virtual Vec3 getSurfaceNormal(const Vec3 & point = Vec3(0)) const override
+	{
+		return m_position;
+	}
+
+private:
+	float m_d;
+};
+
+std::vector<Primitive*> g_objects;
 
 Vec3 g_frameBuffer[WIDTH * HEIGHT];
 
 // Iterate all objects in the scene and find nearest object hit by the ray and assign intersection point
-Sphere* FindNearest(const Ray &ray, float& _t)
+Primitive* FindNearest(const Ray &ray, float& _t)
 {
-	Sphere* obj = NULL;
+	Primitive* obj = NULL;
 	float t = INFINITY;
 	for (int i = 0; i < g_objects.size(); i++)
 	{
-		Sphere* s = g_objects[i];
+		Primitive* s = g_objects[i];
 		float t1 = 0.;
-		if (s->intersects(ray, &t1))
+		if (s->intersects(ray, t1) == RayResult::HIT)
 		{
 			if (t1 < t)
 			{
@@ -109,16 +153,13 @@ Vec3 Shade(const Ray& ray, int depth)
 	if (depth >= MAX_DEPTH) return 0;
 
 	float t = 0.f;
-	Sphere* obj = FindNearest(ray, t);
+	Primitive* obj = FindNearest(ray, t);
+	if (!obj)
+		return Vec3(.68f, .718f, .95f);
 
-	if (obj)
-	{
-		return obj->m_Kd;
-	}
-	else
-	{
-		return Vec3();
-	}
+	Vec3 radiance = obj->m_Kd;
+
+	return radiance;
 }
 
 // Creata a local coordinate system oriented around surface normal of hit point on the object
@@ -160,7 +201,10 @@ void Render()
 			g_frameBuffer[x + y * WIDTH] = Shade(primRay, 0);
 		}
 	}
+}
 
+void OutputFrame()
+{
 	const double gamma = 1 / 2.2;
 	FILE *f = NULL;
 	fopen_s(&f, "render.ppm", "w");
@@ -175,27 +219,48 @@ void Render()
 	fclose(f);
 }
 
-int main()
+int main(int argc, char* argv[])
 {
-	Sphere* s1 = new Sphere(Vec3(-0.75f, -.20f, -2.55f), .55f, Material::DIFFUSE);
-	Sphere* s2 = new Sphere(Vec3(0.5f, 0.12f, -4.5f), .6f, Material::DIFFUSE);
-	Sphere* s3 = new Sphere(Vec3(0.55f, -0.1f, -1.75f), .27f, Material::DIFFUSE);
+	srand(time(NULL));
+
+	printf("Setting scene...\n");
+
+	Sphere* s1 = new Sphere(Vec3(-0.75, -.25, -2.5), .5f, Vec3(0.25, 0.5, 0.75), Material::DIFFUSE);
+	Sphere* s2 = new Sphere(Vec3(0.5, 0., -4.5), .6f, Vec3(0.13, 0.71, 0.), Material::DIFFUSE);
+	Sphere* s3 = new Sphere(Vec3(0.5, -0.1, -1.75), .2f, Vec3(0.05, 0.11, 0.23), Material::DIFFUSE);
+
+	g_objects.push_back(new Plane(Vec3(1, 0, 0), 1.25, Vec3(0.75, .25, .25), Material::DIFFUSE)); // Left
+	g_objects.push_back(new Plane(Vec3(-1, 0, 0), 1.25, Vec3(0.25, 0.25, 0.75), Material::DIFFUSE)); // Right
+	g_objects.push_back(new Plane(Vec3(0, 1, 0), .75, Vec3(0.75), Material::DIFFUSE)); // Bottom
+	g_objects.push_back(new Plane(Vec3(0, -1, 0), 1.25, Vec3(0.75), Material::DIFFUSE)); // Top
+	g_objects.push_back(new Plane(Vec3(0, 0, 1), 5, Vec3(0.5, 0.25, .125), Material::DIFFUSE)); // Front
+	g_objects.push_back(new Plane(Vec3(0, 0, -1), 5, Vec3(0.75), Material::DIFFUSE)); // Back
 
 	g_objects.push_back(s1);
 	g_objects.push_back(s2);
 	g_objects.push_back(s3);
 
-	s1->m_Kd = Vec3(1.f, 0.f, 0.f);
-	s2->m_Kd = Vec3(0.f, 1.f, 0.f);
-	s3->m_Kd = Vec3(0.f, 0.f, 1.f);
+	/*Sphere* l1 = new Sphere(Vec3(0., 2.5f, -2.5), 2.5f, Vec3(1.0f, 1.0f, 1.0f), Material::DIFFUSE);
+	Sphere* l2 = new Sphere(Vec3(0., 2.5f, -1.5), 5.f, Vec3(1.0f, 1.0f, 1.0f), Material::DIFFUSE);*/
 
+	printf("Scene initialized\n");
+
+	auto timer = std::chrono::high_resolution_clock();
+
+	auto begin = timer.now();
+	printf("Starting to render...\n");
 	Render();
+	auto end = timer.now();
+	auto diff = std::chrono::duration_cast<std::chrono::milliseconds> (end - begin).count();
+	printf("Render time: %lld ms\n", diff);
 
-	for (Sphere* obj : g_objects)
-	{
-		SAFE_DELETE(obj);
-	}
-	g_objects.clear();
+	begin = timer.now();
+	OutputFrame();
+	end = timer.now();
+	diff = std::chrono::duration_cast<std::chrono::milliseconds> (end - begin).count();
+	printf("Export time: %lld ms\n", diff);
+
+	system("pause");
 
 	return 0;
 }
