@@ -1,11 +1,11 @@
 #include <iostream>
-#include <time.h>
 #include <random>
 #include <chrono>
 #include <vector>
 
 #include "MathLib.h"
 
+#undef NULL
 #define NULL nullptr
 #define SAFE_DELETE(x) { if (x) { delete x; x = NULL; }}
 
@@ -18,9 +18,10 @@ typedef unsigned int uint;
 #define HEIGHT 720
 #define FOV M_PI / 4
 #define MAX_DEPTH 10
+#define SPP 256
 
-std::default_random_engine rng;
-std::uniform_real_distribution<float> uniformDist(0.0f, 1.0f);
+std::default_random_engine generator;
+std::uniform_real_distribution<float> distribution(0, 1);
 
 class Ray
 {
@@ -51,8 +52,10 @@ public:
 	Vec3 m_position;
 	Material m_type;
 
-	Vec3 m_Kd;
-	Vec3 m_Le;
+	Vec3 m_Kd = 0.5f;
+	Vec3 m_Le = 0.f;
+
+	bool isLight() const { return length2(m_Le) > 0.f; }
 };
 
 class Sphere : public Primitive
@@ -82,7 +85,7 @@ public:
 
 	virtual Vec3 getSurfaceNormal(const Vec3& hit = Vec3(0)) const override
 	{
-		return (hit - m_position);
+		return normalize(hit - m_position);
 	}
 
 	float m_radius;
@@ -147,30 +150,27 @@ Primitive* FindNearest(const Ray &ray, float& _t)
 	return obj;
 }
 
-// Compute a radiance value for an object based on its material type
-Vec3 Shade(const Ray& ray, int depth)
-{
-	if (depth >= MAX_DEPTH) return 0;
-
-	float t = 0.f;
-	Primitive* obj = FindNearest(ray, t);
-	if (!obj)
-		return Vec3(.68f, .718f, .95f);
-
-	Vec3 radiance = obj->m_Kd;
-
-	return radiance;
-}
-
 // Creata a local coordinate system oriented around surface normal of hit point on the object
 void formLocalCS(const Vec3& N, Vec3& Nt, Vec3& Nb)
 {
-	if (std::abs(N.x) > std::abs(N.y))
+	/*if (std::abs(N.x) > std::abs(N.y))
 		Nt = Vec3(N.z, 0., -N.x) * (1. / sqrt(N.x * N.x + N.z * N.z));
 	else
 		Nt = Vec3(0., -N.z, N.y) * (1. / sqrt(N.y * N.y + N.z * N.z));
 
 	Nb = cross(N, Nb);
+*/
+	if (std::abs(N.x) > std::abs(N.y)) {
+		// project to the y = 0 plane and construct a normalized orthogonal vector in this plane
+		float invLen = 1.f / sqrtf(N.x * N.x + N.z * N.z);
+		Nt = Vec3(-N.z * invLen, 0.0f, N.x * invLen);
+	}
+	else {
+		// project to the x = 0 plane and construct a normalized orthogonal vector in this plane
+		float invLen = 1.0f / sqrtf(N.y * N.y + N.z * N.z);
+		Nt = Vec3(0.0f, N.z * invLen, -N.y * invLen);
+	}
+	Nb = cross(N, Nt);
 }
 
 // Generate a uniformly sampled direction
@@ -184,21 +184,77 @@ Vec3 generateSampleDirOverHemisphere(float r1, float r2)
 	return Vec3(x, r1, z);
 }
 
+// Compute a radiance value for an object based on its material type
+Vec3 Shade(const Ray& ray, int depth)
+{
+	if (depth >= MAX_DEPTH)
+	{
+		return Vec3(0.f);
+	}
+
+	float t = 0.f;
+	Primitive* obj = FindNearest(ray, t);
+	if (!obj)
+		return Vec3(.68f, .718f, .95f);
+
+	Vec3 hit = ray.m_origin + ray.m_dir * t;
+	Vec3 n = obj->getSurfaceNormal(hit);
+
+#ifndef GI
+	Vec3 indirectLigthing = obj->m_Le;
+	Vec3 Nt, Nb;
+	formLocalCS(n, Nt, Nb);
+	float r1 = distribution(generator);
+	float r2 = distribution(generator);
+	Vec3 sample = generateSampleDirOverHemisphere(r1, r2);
+	Vec3 sampleWorld(
+		sample.x * Nb.x + sample.y * n.x + sample.z * Nt.x,
+		sample.x * Nb.y + sample.y * n.y + sample.z * Nt.y,
+		sample.x * Nb.z + sample.y * n.z + sample.z * Nt.z);
+	indirectLigthing += Shade(Ray(hit, sampleWorld), depth + 1);
+	indirectLigthing *= obj->m_Kd;
+
+	return indirectLigthing;
+#else
+	Vec3 color = 0.f;
+	for (const Primitive* primitive : g_objects)
+	{
+		if (primitive->isLight())
+		{
+			Vec3 l = normalize(primitive->m_position - hit);
+			float nDotL = fmaxf(0.f, dot(n, l));
+			color += obj->m_Kd * primitive->m_Le * nDotL / M_PI;
+		}
+	}
+
+	return color;
+#endif
+}
+
 // Run render loop to shade each pixel in frame buffer
 void Render()
 {
 	double scale = tan(FOV * 0.5);
 	double aspect = (double)WIDTH / HEIGHT;
 	Vec3 origin = 0.f;
+	//#pragma omp parallel for schedule(dynamic)
 	for (int y = 0; y < HEIGHT; y++)
 	{
 		for (int x = 0; x < WIDTH; x++)
 		{
-			float dx = (2 * (x + 0.5) / (double)WIDTH - 1) * aspect * scale;
-			float dy = (1 - 2 * (y + 0.5) / (double)HEIGHT) * scale;
-			Vec3 dir = normalize(Vec3(dx, dy, -1));
-			Ray primRay(origin, dir);
-			g_frameBuffer[x + y * WIDTH] = Shade(primRay, 0);
+			Vec3 radiance = 0;
+			for (int s = 0; s < SPP; ++s)
+			{
+				float dx = (2 * (x + 0.5) / (double)WIDTH - 1) * aspect * scale;
+				float dy = (1 - 2 * (y + 0.5) / (double)HEIGHT) * scale;
+				dx += distribution(generator) / 700;
+				dy += distribution(generator) / 700;
+				Vec3 dir = normalize(Vec3(dx, dy, -1));
+				Ray primRay(origin, dir);
+				radiance += Shade(primRay, 0);
+			}
+
+			g_frameBuffer[x + y * WIDTH] += radiance / SPP;
 		}
 	}
 }
@@ -221,13 +277,15 @@ void OutputFrame()
 
 int main(int argc, char* argv[])
 {
-	srand(time(NULL));
-
 	printf("Setting scene...\n");
 
 	Sphere* s1 = new Sphere(Vec3(-0.75, -.25, -2.5), .5f, Vec3(0.25, 0.5, 0.75), Material::DIFFUSE);
 	Sphere* s2 = new Sphere(Vec3(0.5, 0., -4.5), .6f, Vec3(0.13, 0.71, 0.), Material::DIFFUSE);
 	Sphere* s3 = new Sphere(Vec3(0.5, -0.1, -1.75), .2f, Vec3(0.05, 0.11, 0.23), Material::DIFFUSE);
+
+	g_objects.push_back(s1);
+	g_objects.push_back(s2);
+	g_objects.push_back(s3);
 
 	g_objects.push_back(new Plane(Vec3(1, 0, 0), 1.25, Vec3(0.75, .25, .25), Material::DIFFUSE)); // Left
 	g_objects.push_back(new Plane(Vec3(-1, 0, 0), 1.25, Vec3(0.25, 0.25, 0.75), Material::DIFFUSE)); // Right
@@ -236,28 +294,23 @@ int main(int argc, char* argv[])
 	g_objects.push_back(new Plane(Vec3(0, 0, 1), 5, Vec3(0.5, 0.25, .125), Material::DIFFUSE)); // Front
 	g_objects.push_back(new Plane(Vec3(0, 0, -1), 5, Vec3(0.75), Material::DIFFUSE)); // Back
 
-	g_objects.push_back(s1);
-	g_objects.push_back(s2);
-	g_objects.push_back(s3);
-
-	/*Sphere* l1 = new Sphere(Vec3(0., 2.5f, -2.5), 2.5f, Vec3(1.0f, 1.0f, 1.0f), Material::DIFFUSE);
-	Sphere* l2 = new Sphere(Vec3(0., 2.5f, -1.5), 5.f, Vec3(1.0f, 1.0f, 1.0f), Material::DIFFUSE);*/
+	g_objects.push_back(new Sphere(Vec3(0., 2.5f, -1.5), 5.f, Vec3(1.f), Material::DIFFUSE, Vec3(1.f)));
 
 	printf("Scene initialized\n");
 
-	auto timer = std::chrono::high_resolution_clock();
+	auto timer = chrono::high_resolution_clock();
 
 	auto begin = timer.now();
 	printf("Starting to render...\n");
 	Render();
 	auto end = timer.now();
-	auto diff = std::chrono::duration_cast<std::chrono::milliseconds> (end - begin).count();
+	auto diff = chrono::duration_cast<chrono::milliseconds> (end - begin).count();
 	printf("Render time: %lld ms\n", diff);
 
 	begin = timer.now();
 	OutputFrame();
 	end = timer.now();
-	diff = std::chrono::duration_cast<std::chrono::milliseconds> (end - begin).count();
+	diff = chrono::duration_cast<chrono::milliseconds> (end - begin).count();
 	printf("Export time: %lld ms\n", diff);
 
 	system("pause");

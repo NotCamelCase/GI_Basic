@@ -4,8 +4,6 @@
 #include <math.h>
 #undef _USE_MATH_DEFINES
 
-#define M_PI 3.141592653589793
-
 #define EPSILON FLT_EPSILON
 
 template<class T, int N>
