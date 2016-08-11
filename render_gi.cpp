@@ -11,17 +11,16 @@
 
 using namespace std;
 
-typedef unsigned char uchar;
 typedef unsigned int uint;
 
-#define WIDTH 1024
-#define HEIGHT 768
-#define FOV M_PI / 3.5
+#define WIDTH 1920
+#define HEIGHT 1080
+#define FOV (M_PI / 3.5)
 #define MAX_DEPTH 20
-#define SPP 64
+#define NUM_SAMPLES 5000
 
-std::default_random_engine generator;
-std::uniform_real_distribution<float> distribution(0, 1);
+static default_random_engine g_rndEngine;
+static uniform_real_distribution<float> g_uniformRnd(0.f, 1.f);
 
 class Ray
 {
@@ -33,10 +32,11 @@ public:
 	Vec3 m_dir;
 };
 
-enum Material
+enum class Material
 {
 	DIFFUSE,
-	SPECULAR
+	SPECULAR,
+	REFRACT
 };
 
 enum class RayResult { HIT, MISS };
@@ -44,7 +44,7 @@ enum class RayResult { HIT, MISS };
 class Primitive
 {
 public:
-	Primitive(const Vec3& pos, const Vec3& albedo, Material type, const Vec3& Le = 0) : m_position(pos), m_type(type), m_Kd(albedo), m_Le(Le) {}
+	Primitive(const Vec3& pos, const Vec3& albedo, Material type, const Vec3& Le = 0, float ior = 0.f) : m_ior(ior), m_position(pos), m_type(type), m_Kd(albedo), m_Le(Le) {}
 	virtual ~Primitive() {}
 
 	virtual RayResult intersects(const Ray& ray, float& t) const = 0;
@@ -55,6 +55,7 @@ public:
 
 	Vec3 m_Kd = 0.5f;
 	Vec3 m_Le = 0.f;
+	float m_ior = 1.f;
 
 	bool isLight() const { return length2(m_Le) > 0.f; }
 };
@@ -62,7 +63,7 @@ public:
 class Sphere : public Primitive
 {
 public:
-	Sphere(const Vec3 &cent, float rad, const Vec3& sc, Material type, const Vec3& Le = 0) : Primitive(cent, sc, type, Le), m_radius(rad) {}
+	Sphere(const Vec3 &cent, float rad, const Vec3& sc, Material type, const Vec3& Le = 0, float ior = 0.f) : Primitive(cent, sc, type, Le, ior), m_radius(rad) {}
 	~Sphere() {}
 
 	virtual RayResult intersects(const Ray& ray, float& t) const override
@@ -95,7 +96,7 @@ public:
 class Plane : public Primitive
 {
 public:
-	Plane(const Vec3 &n, float d, const Vec3& sc, Material type) : Primitive(n, sc, type), m_d(d) {}
+	Plane(const Vec3 &n, float d, const Vec3& sc, Material type, float ior = 0.f) : Primitive(n, sc, type, 0.f, ior), m_d(d) {}
 	~Plane() {}
 
 	virtual RayResult intersects(const Ray & ray, float & t) const override
@@ -124,7 +125,7 @@ private:
 	float m_d;
 };
 
-std::vector<Primitive*> g_objects;
+vector<Primitive*> g_objects;
 
 Vec3 g_frameBuffer[WIDTH * HEIGHT];
 
@@ -151,10 +152,10 @@ Primitive* FindNearest(const Ray &ray, float& _t)
 	return obj;
 }
 
-// Creata a local coordinate system oriented around surface normal of hit point on the object
+// Creata a local cartesian system oriented around surface normal of hit point
 void formLocalCS(const Vec3& N, Vec3& Nt, Vec3& Nb)
 {
-	if (std::abs(N.x) > std::abs(N.y))
+	if (fabs(N.x) > fabs(N.y))
 	{
 		float invLen = 1.f / sqrtf(N.x * N.x + N.z * N.z);
 		Nt = Vec3(-N.z * invLen, 0.0f, N.x * invLen);
@@ -171,51 +172,66 @@ void formLocalCS(const Vec3& N, Vec3& Nt, Vec3& Nb)
 // Generate a uniformly sampled direction
 Vec3 generateSampleDirOverHemisphere(float r1, float r2)
 {
-	float sinTheta = sqrt(1 - r1 * r1);
-	float phi = 2 * M_PI * r2;
-	float x = sinTheta * cos(phi);
-	float z = sinTheta * sin(phi);
+	const float sint = sqrt(1 - r1 * r1);
+	const float phi = 2 * M_PI * r2;
 
-	return Vec3(x, r1, z);
+	return Vec3(sint * cos(phi), r1, sint * sin(phi));
 }
 
 // Compute a radiance value for an object based on its material type
 Vec3 Shade(const Ray& ray, int depth)
 {
-	if (depth >= MAX_DEPTH)
-		return Vec3(0.f);
+	if (depth >= MAX_DEPTH) return Vec3(0.f);
 
 	float t = 0.f;
 	Primitive* obj = FindNearest(ray, t);
-	if (!obj)
-		return Vec3(0.5f);
+	if (!obj) return Vec3(0.5f);
 
 	Vec3 hit = ray.m_origin + ray.m_dir * t;
 	Vec3 n = obj->getSurfaceNormal(hit);
 
 	if (obj->m_type == Material::DIFFUSE)
 	{
-		Vec3 indirectLigthing = obj->m_Le;
 		Vec3 Nt, Nb;
 		formLocalCS(n, Nt, Nb);
-		float r1 = distribution(generator);
-		float r2 = distribution(generator);
-		Vec3 sample = generateSampleDirOverHemisphere(r1, r2);
-		Vec3 sampleWorld(
-			sample.x * Nb.x + sample.y * n.x + sample.z * Nt.x,
-			sample.x * Nb.y + sample.y * n.y + sample.z * Nt.y,
-			sample.x * Nb.z + sample.y * n.z + sample.z * Nt.z);
-		indirectLigthing += Shade(Ray(hit + sampleWorld * 1e-5, sampleWorld), depth + 1) * obj->m_Kd;
+		float r1 = g_uniformRnd(g_rndEngine);
+		float r2 = g_uniformRnd(g_rndEngine);
+		Vec3 uniSample = generateSampleDirOverHemisphere(r1, r2);
+		Vec3 sampleProjected
+		(
+			dot(uniSample, Vec3(Nb.x, n.x, Nt.x)),
+			dot(uniSample, Vec3(Nb.y, n.y, Nt.y)),
+			dot(uniSample, Vec3(Nb.z, n.z, Nt.z))
+		);
 
-		return indirectLigthing;
+		return obj->m_Le + Shade(Ray(hit + sampleProjected * 1e-5, sampleProjected), depth + 1) * obj->m_Kd;
 	}
 	else if (obj->m_type == Material::SPECULAR)
 	{
 		Vec3 refdir = reflect(ray.m_dir, n);
-		return Shade(Ray(hit + refdir * 1e-5, refdir), depth + 1);
+		return Shade(Ray(hit + refdir * 1e-5, refdir), depth + 1) * obj->m_Kd;
 	}
-	else
-		return Vec3(0.f);
+	else if (obj->m_type == Material::REFRACT)
+	{
+		float m_ior = obj->m_ior;
+		float R0 = (1.0f - m_ior) / (1.0 + m_ior);
+		R0 = R0 * R0;
+		n = (dot(n, ray.m_dir) > 0 ? -n : n);
+		m_ior = 1 / m_ior;
+		float cost1 = -(dot(n, ray.m_dir));
+		float cost2 = 1.0f - m_ior * m_ior * (1.0f - cost1 * cost1);
+		Vec3 refrDir = 0.f;
+		if (cost2 > 0)
+		{
+			refrDir = normalize((ray.m_dir * m_ior) + (n * (m_ior * cost1 - sqrtf(cost2))));
+		}
+		else
+		{
+			refrDir = normalize(ray.m_dir + n * (cost1 * 2));
+		}
+
+		return Shade(Ray(hit + refrDir * 1e-5, refrDir), depth + 1);
+	}
 }
 
 // Run render loop to shade each pixel in frame buffer
@@ -229,21 +245,20 @@ void Render()
 #endif
 	for (int y = 0; y < HEIGHT; y++)
 	{
+		fprintf(stdout, "\rRendering: %8.2f%%", (double)y / HEIGHT * 100);
 		for (int x = 0; x < WIDTH; x++)
 		{
 			Vec3 radiance = 0.f;
-			for (int i = 0; i < SPP; i++)
+			for (int i = 0; i < NUM_SAMPLES; i++)
 			{
 				float dx = (2 * (x + 0.5) / (double)WIDTH - 1) * aspect * scale;
 				float dy = (1 - 2 * (y + 0.5) / (double)HEIGHT) * scale;
-				dx += distribution(generator) / 700;
-				dy += distribution(generator) / 700;
-				Vec3 dir = normalize(Vec3(dx, dy, -1));
+				Vec3 dir = normalize(Vec3(dx + g_uniformRnd(g_rndEngine) / 1000, dy + g_uniformRnd(g_rndEngine) / 1000, -1));
 				Ray primRay(origin, dir);
 				radiance += Shade(primRay, 0);
 			}
 
-			g_frameBuffer[x + y * WIDTH] = radiance / SPP;
+			g_frameBuffer[x + y * WIDTH] = radiance / NUM_SAMPLES;
 		}
 	}
 }
@@ -256,9 +271,9 @@ void OutputFrame()
 	fprintf(f, "P3\n%d %d\n%d\n ", WIDTH, HEIGHT, 255);
 	for (int32_t i = 0; i < WIDTH * HEIGHT; ++i)
 	{
-		uint r = (255 * fmin(pow(g_frameBuffer[i].x, gamma), 1.));
-		uint g = (255 * fmin(pow(g_frameBuffer[i].y, gamma), 1.));
-		uint b = (255 * fmin(pow(g_frameBuffer[i].z, gamma), 1.));
+		uint r = (255 * fminf(pow(g_frameBuffer[i].x, gamma), 1.));
+		uint g = (255 * fminf(pow(g_frameBuffer[i].y, gamma), 1.));
+		uint b = (255 * fminf(pow(g_frameBuffer[i].z, gamma), 1.));
 		fprintf(f, "%d %d %d ", r, g, b);
 	}
 	fclose(f);
@@ -269,38 +284,38 @@ int main(int argc, char* argv[])
 	printf("Setting scene...\n");
 
 	Sphere* s1 = new Sphere(Vec3(-0.80, -.25, -2.5), .5f, Vec3(1.0f, 0.f, 0.f), Material::DIFFUSE);
-	Sphere* s2 = new Sphere(Vec3(0.5, 0., -4.5), .6f, Vec3(0.f, 1.f, 0.f), Material::SPECULAR);
-	Sphere* s3 = new Sphere(Vec3(0.5, -0.1, -1.75), .2f, Vec3(0.f, 0.f, 1.f), Material::DIFFUSE);
+	Sphere* s2 = new Sphere(Vec3(1.95, 0., -4.f), .6f, Vec3(.25f, .5f, 0.025f), Material::SPECULAR);
+	Sphere* s3 = new Sphere(Vec3(0.35, -0.495, -1.75), .29f, Vec3(1.f, 1.f, 0.f), Material::REFRACT, 1.55f);
+
+	Sphere* s4 = new Sphere(Vec3(0.250, -0.125, -3.55), .35f, Vec3(0.f, 0.f, 1.f), Material::DIFFUSE);
+	Sphere* s5 = new Sphere(Vec3(2.75f, 0.75f, -7.5), 1.09f, Vec3(.625f, .325f, 0.125f), Material::SPECULAR);
 
 	g_objects.push_back(s1);
 	g_objects.push_back(s2);
 	g_objects.push_back(s3);
+	g_objects.push_back(s4);
+	g_objects.push_back(s5);
 
-	g_objects.push_back(new Plane(Vec3(1, 0, 0), 2.f, Vec3(0.75, .25, .25), Material::DIFFUSE)); // Left
-	//g_objects.push_back(new Plane(Vec3(-1, 0, 0), 2.f, Vec3(0.25, 0.25, 0.75), Material::DIFFUSE)); // Right
-	g_objects.push_back(new Plane(Vec3(0, 1, 0), .75, Vec3(0.75), Material::DIFFUSE)); // Bottom
-	//g_objects.push_back(new Plane(Vec3(0, -1, 0), 1.25, Vec3(0.75), Material::DIFFUSE)); // Top
-	//g_objects.push_back(new Plane(Vec3(0, 0, 1), 5, Vec3(0.5, 0.25, .125), Material::DIFFUSE)); // Front
-	//g_objects.push_back(new Plane(Vec3(0, 0, -1), 5, Vec3(0.75), Material::DIFFUSE)); // Back
+	g_objects.push_back(new Plane(Vec3(1, 0, 0), 1.28f, Vec3(0.75, .25, .25), Material::DIFFUSE)); // Left
+	g_objects.push_back(new Plane(Vec3(0, 1, 0), .75, Vec3(0.5f), Material::DIFFUSE)); // Bottom
 
-	g_objects.push_back(new Sphere(Vec3(0., 1.85f, -5), .5f, Vec3(1.f), Material::DIFFUSE, Vec3(1.f)));
+	g_objects.push_back(new Sphere(Vec3(0., 1.88f, -5), .0035f, Vec3(1.f), Material::DIFFUSE, Vec3(1.f))); // Single light
 
 	printf("Scene initialized\n");
 
 	auto timer = chrono::high_resolution_clock();
 
 	auto begin = timer.now();
-	printf("Starting to render...\n");
 	Render();
 	auto end = timer.now();
-	auto diff = chrono::duration_cast<chrono::milliseconds> (end - begin).count();
-	printf("Render time: %lld ms\n", diff);
+	auto diff = chrono::duration_cast<chrono::seconds> (end - begin).count();
+	printf("\nRender time: %lld sec\n", diff);
 
 	begin = timer.now();
 	OutputFrame();
 	end = timer.now();
-	diff = chrono::duration_cast<chrono::milliseconds> (end - begin).count();
-	printf("Export time: %lld ms\n", diff);
+	diff = chrono::duration_cast<chrono::seconds> (end - begin).count();
+	printf("Export time: %lld sec\n", diff);
 
 	system("pause");
 
