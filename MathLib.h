@@ -254,7 +254,7 @@ bool operator==(const Vector<T, N>& a, const Vector<T, N>& b)
 {
 	for (int i = 0; i < N; i++)
 	{
-		if (!abs(a[i] - b[i]) <= EPSILON)
+		if (!fabs(a[i]) - fabs(b[i]) <= EPSILON)
 			return false;
 	}
 
