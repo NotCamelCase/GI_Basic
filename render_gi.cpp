@@ -35,7 +35,8 @@ public:
 
 enum Material
 {
-	DIFFUSE
+	DIFFUSE,
+	SPECULAR
 };
 
 enum class RayResult { HIT, MISS };
@@ -191,36 +192,30 @@ Vec3 Shade(const Ray& ray, int depth)
 
 	Vec3 hit = ray.m_origin + ray.m_dir * t;
 	Vec3 n = obj->getSurfaceNormal(hit);
-	n = (dot(ray.m_dir, n) > 0 ? -n : n);
 
-#ifndef GI
-	Vec3 indirectLigthing = obj->m_Le;
-	Vec3 Nt, Nb;
-	formLocalCS(n, Nt, Nb);
-	float r1 = distribution(generator);
-	float r2 = distribution(generator);
-	Vec3 sample = generateSampleDirOverHemisphere(r1, r2);
-	Vec3 sampleWorld(
-		sample.x * Nb.x + sample.y * n.x + sample.z * Nt.x,
-		sample.x * Nb.y + sample.y * n.y + sample.z * Nt.y,
-		sample.x * Nb.z + sample.y * n.z + sample.z * Nt.z);
-	indirectLigthing += Shade(Ray(hit, sampleWorld), depth + 1) * obj->m_Kd;
-
-	return indirectLigthing;
-#else
-	Vec3 color = obj->m_Kd;
-	/*for (const Primitive* primitive : g_objects)
+	if (obj->m_type == Material::DIFFUSE)
 	{
-		if (primitive->isLight())
-		{
-			Vec3 l = normalize(primitive->m_position - hit);
-			float nDotL = fmaxf(0.f, dot(n, l));
-			color += obj->m_Kd * primitive->m_Le * nDotL / M_PI;
-		}
-	}*/
+		Vec3 indirectLigthing = obj->m_Le;
+		Vec3 Nt, Nb;
+		formLocalCS(n, Nt, Nb);
+		float r1 = distribution(generator);
+		float r2 = distribution(generator);
+		Vec3 sample = generateSampleDirOverHemisphere(r1, r2);
+		Vec3 sampleWorld(
+			sample.x * Nb.x + sample.y * n.x + sample.z * Nt.x,
+			sample.x * Nb.y + sample.y * n.y + sample.z * Nt.y,
+			sample.x * Nb.z + sample.y * n.z + sample.z * Nt.z);
+		indirectLigthing += Shade(Ray(hit + sampleWorld * 1e-5, sampleWorld), depth + 1) * obj->m_Kd;
 
-	return color;
-#endif
+		return indirectLigthing;
+	}
+	else if (obj->m_type == Material::SPECULAR)
+	{
+		Vec3 refdir = reflect(ray.m_dir, n);
+		return Shade(Ray(hit + refdir * 1e-5, refdir), depth + 1);
+	}
+	else
+		return Vec3(0.f);
 }
 
 // Run render loop to shade each pixel in frame buffer
@@ -273,16 +268,16 @@ int main(int argc, char* argv[])
 {
 	printf("Setting scene...\n");
 
-	Sphere* s1 = new Sphere(Vec3(-0.75, -.25, -2.5), .5f, Vec3(1.0f, 0.f, 0.f), Material::DIFFUSE);
-	Sphere* s2 = new Sphere(Vec3(0.5, 0., -4.5), .6f, Vec3(0.f, 1.f, 0.f), Material::DIFFUSE);
+	Sphere* s1 = new Sphere(Vec3(-0.80, -.25, -2.5), .5f, Vec3(1.0f, 0.f, 0.f), Material::DIFFUSE);
+	Sphere* s2 = new Sphere(Vec3(0.5, 0., -4.5), .6f, Vec3(0.f, 1.f, 0.f), Material::SPECULAR);
 	Sphere* s3 = new Sphere(Vec3(0.5, -0.1, -1.75), .2f, Vec3(0.f, 0.f, 1.f), Material::DIFFUSE);
 
 	g_objects.push_back(s1);
 	g_objects.push_back(s2);
 	g_objects.push_back(s3);
 
-	//g_objects.push_back(new Plane(Vec3(1, 0, 0), 2.f, Vec3(0.75, .25, .25), Material::DIFFUSE)); // Left
-	g_objects.push_back(new Plane(Vec3(-1, 0, 0), 2.f, Vec3(0.25, 0.25, 0.75), Material::DIFFUSE)); // Right
+	g_objects.push_back(new Plane(Vec3(1, 0, 0), 2.f, Vec3(0.75, .25, .25), Material::DIFFUSE)); // Left
+	//g_objects.push_back(new Plane(Vec3(-1, 0, 0), 2.f, Vec3(0.25, 0.25, 0.75), Material::DIFFUSE)); // Right
 	g_objects.push_back(new Plane(Vec3(0, 1, 0), .75, Vec3(0.75), Material::DIFFUSE)); // Bottom
 	//g_objects.push_back(new Plane(Vec3(0, -1, 0), 1.25, Vec3(0.75), Material::DIFFUSE)); // Top
 	//g_objects.push_back(new Plane(Vec3(0, 0, 1), 5, Vec3(0.5, 0.25, .125), Material::DIFFUSE)); // Front
