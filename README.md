@@ -1,4 +1,4 @@
 # GI_Basic
 Simple Global Illumination Implementation Made for Fun
 
-http://imgur.com/e8bXTbw
+http://i.imgur.com/e8bXTbw.jpg
